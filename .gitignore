@@ -1,0 +1,10 @@
+data/
+sorter_results/
+tmp/
+*.h5
+*.rhs
+*.dat
+
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

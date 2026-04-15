@@ -14,7 +14,7 @@ import probeinterface as pi
 # =========================================================
 # HELPER FUNCTIONS
 # =========================================================
-def create_probe(is_mea, num_channels, pitch=100, radius=15):
+def create_probe(is_mea, num_channels, pitch=200, radius=15):
     """
     Generates the electrode map depending on the geometry and number of channels.
     """

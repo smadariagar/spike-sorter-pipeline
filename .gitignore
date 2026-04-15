@@ -1,4 +1,5 @@
 data/
+docs/
 sorter_results/
 tmp/
 *.h5

@@ -2,7 +2,7 @@ import numpy as np
 import os
 import glob
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, simpledialog
 
 import spikeinterface.extractors as se
 import spikeinterface.preprocessing as spre
@@ -56,16 +56,18 @@ def create_probe(is_mea, num_channels, pitch=200, radius=15):
 
 # General settings
 MEA_probe = True
-sorter_name = 'mountainsort5' 
+sorter_name = 'mountainsort4' 
 
 # Sorter parameters dictionary
 # You can modify any parameter here without touching the program's logic
 sorter_params = {
-    'detect_threshold': 5.5,   # Sensitivity for detecting spikes (previously 3.0)
-    'detect_sign': -1,         # -1 looks for negative peaks (standard extracellular)
-    'n_jobs': -1,              # -1 uses all CPU cores (Changed from num_workers for MS5)
-    'filter': False,           # IMPORTANT: False because we already filter in Phase 2
-    'whiten': True             # Spatial noise whitening
+    'detect_threshold': 2.5,                            # Sensitivity for detecting spikes (previously 3.0)
+    'detect_sign': -1,                                  # -1 looks for negative peaks (standard extracellular)
+    'num_workers': -1,                                       # -1 uses all CPU cores (num_workers for MS4 and n_jobs for MS5)
+    'filter': False,                                    # IMPORTANT: False because we already filter in Phase 2
+    'whiten': True,                                     # Spatial noise whitening
+    'scheme2_training_duration_sec': 600,               # 
+    'scheme2_max_num_snippets_per_training_batch': 500
 }
 
 # =========================================================
@@ -76,42 +78,62 @@ if __name__ == '__main__':
     # 1. FILE SELECTION UI
     root = tk.Tk()
     root.withdraw()
-    selected_file_path = filedialog.askopenfilename(
-        title="Select a file",
-        filetypes=[("H5 files", "*.h5"), ("RHS files", "*.rhs"), ("All files", "*.*")]
+
+    selected_file_paths = filedialog.askopenfilenames(
+        title="Select recording files (You can select multiple)",
+        filetypes=[("H5/RHS files", "*.h5 *.rhs"), ("H5 files", "*.h5"), ("RHS files", "*.rhs"), ("All files", "*.*")]
     )
 
-    if not selected_file_path:
+    if not selected_file_paths:
         print("Operation canceled.")
         exit() 
 
-    input_folder = os.path.dirname(selected_file_path)
-    file_name = os.path.basename(selected_file_path)
+    selected_file_paths = sorted(list(selected_file_paths))
+
+    custom_name = simpledialog.askstring("Output Name", "Enter the name for this analysis session:")
+    if not custom_name:
+        print("No name provided. Operation canceled.")
+        exit()
+
+    input_folder = os.path.dirname(selected_file_paths[0])
     output_folder = os.path.join(input_folder, 'sorter_results/')
     os.makedirs(output_folder, exist_ok=True)
+
+    sorting_output_folder = os.path.join(output_folder, f"sorting_{custom_name}")
+    waveforms_folder = os.path.join(output_folder, f"waveforms_{custom_name}")
 
     # =========================================================
     # PHASE 1: DATA LOADING AND GEOMETRY
     # =========================================================
-    if file_name[-2:] == 'h5':
-        print("Loading data from H5 file (Intan)...")
-        search_pattern = os.path.join(input_folder, "*.h5")
-        file_list = sorted(glob.glob(search_pattern))        
-        recording_list = []
-        for full_file_path in file_list:
-            rec = se.read_mcsh5(full_file_path, stream_id='0')
+    recording_list = []
+
+    if selected_file_paths[0].endswith('.h5'):
+        print(f"Loading {len(selected_file_paths)} H5 file(s) (Intan/MCS)...")
+        for full_file_path in selected_file_paths:
+            try:
+                rec = se.read_mcsh5(full_file_path, stream_id='0')
+                recording_list.append(rec)
+            except IndexError:
+                print(f"  -> WARNING: Skipping '{os.path.basename(full_file_path)}' (Likely empty or corrupted file)")
+            except Exception as e:
+                print(f"  -> WARNING: Could not load '{os.path.basename(full_file_path)}'. Error: {e}")
+     
+    elif selected_file_paths[0].endswith('.rhs'):
+        print(f"Loading {len(selected_file_paths)} RHS file(s) (Intan)...")
+        for full_file_path in selected_file_paths:
+            rec = se.read_intan(full_file_path, stream_id='0')
+            rec = spre.unsigned_to_signed(rec) # true zero
             recording_list.append(rec)
+    
+    if not recording_list:
+        print("\nError: No valid recordings were loaded. Operation canceled.")
+        exit()
 
-        sorting_output_folder = os.path.join(output_folder, "sorting_" + file_name[:-3]) 
-        waveforms_folder = os.path.join(output_folder, "waveforms_" + file_name[:-3]) 
+    # One o more files
+    if len(recording_list) > 1:
         recording = sc.concatenate_recordings(recording_list)
-
-    elif file_name[-3:] == 'rhs':
-        print("Loading data from RHS file (Intan)...")
-        recording = se.read_intan(selected_file_path, stream_id='0')
-        recording = spre.unsigned_to_signed(recording) # true zero
-        sorting_output_folder = os.path.join(output_folder, "sorting_" + file_name[:-4]) 
-        waveforms_folder = os.path.join(output_folder, "waveforms_" + file_name[:-4]) 
+    else:
+        recording = recording_list[0]
 
     num_channels = recording.get_num_channels()
     print(f"Loaded channels: {num_channels}")
@@ -134,7 +156,7 @@ if __name__ == '__main__':
         recording=recording,
         folder=sorting_output_folder,  
         remove_existing_folder=True,
-        **sorter_params  # <--- Unpacks all your parameters here
+        **sorter_params  # sorter parameters here
     )
 
     found_units = sorting_result.get_unit_ids()

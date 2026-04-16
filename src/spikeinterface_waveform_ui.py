@@ -11,16 +11,31 @@ print("Loading data analyzer...")
 root = tk.Tk()
 root.withdraw()
 
+# FOLDER SELECTION
+# Added 'mustexist=True' and a much clearer title
 selected_folder_path = filedialog.askdirectory(
-    title="Select a folder",
+    title="Select the specific 'waveforms_...' folder (Click once and press OK)",
+    mustexist=True
 )
 
 if not selected_folder_path:
     print("Operation canceled.")
     exit() 
 
-analyzer = sc.load_sorting_analyzer(selected_folder_path)
+print(f"Attempting to load analyzer from: {selected_folder_path}")
 
+# VALIDATION AND ERROR HANDLING
+try:
+    analyzer = sc.load_sorting_analyzer(selected_folder_path)
+except Exception as e:
+    print("\nERROR: Could not load the analyzer.")
+    print("Make sure you selected the EXACT folder containing the waveforms data")
+    print("(e.g., 'waveforms_my_recording'), and not the parent 'sorter_results' folder.")
+    print(f"Technical details: {e}")
+    exit()
+
+# =========================================================
+# CSV EXPORT
 # =========================================================
 print("\nExtracting list of spikes and channels for CSV...")
 
@@ -61,8 +76,10 @@ if not df_spikes.empty:
 else:
     print("No spikes found to export.")
 
+# =========================================================
 # VISUAL INTERFACE
 # =========================================================
 print("\nOpening the visual interface...")
+
 # Launch the application
 app = sig.run_mainwindow(analyzer)

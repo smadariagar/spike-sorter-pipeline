@@ -14,7 +14,7 @@ import probeinterface as pi
 # =========================================================
 # HELPER FUNCTIONS
 # =========================================================
-def create_probe(is_mea, num_channels, pitch=200, radius=15):
+def create_probe(is_mea, file_type, num_channels, pitch=200, radius=15):
     """
     Generates the electrode map depending on the geometry and number of channels.
     """
@@ -28,29 +28,36 @@ def create_probe(is_mea, num_channels, pitch=200, radius=15):
     with open(json_path, 'r') as f:
         mea_mapping = json.load(f)
     
-    list_2_map = [str(x) for x in mea_mapping["channel_mapping"]]
-    print(list_2_map)
-    
+    map_key = "channel_mapping_rhs" if file_type == 'rhs' else "channel_mapping_h5"
+    list_2_map = mea_mapping[map_key]
+
     print(f"Assigning MEA spatial map for {num_channels} channels...")
     probe_mea = pi.Probe(ndim=2, si_units='um')
-    positions = []
+    positions, valid_channel_indices = [], []
     
-    for num in list_2_map:
-        x = (int(num[0]) - 1) * pitch
-        y = (int(num[1]) - 1) * pitch
+    for i, num in enumerate(list_2_map):
+        num_str = str(num)
+        
+        if num_str == '0':
+            continue
+            
+        x = (int(num_str[0]) - 1) * pitch
+        y = (8 - int(num_str[1])) * pitch
         
         positions.append([x, y])
+        valid_channel_indices.append(i)
 
     # Safety check
-    if len(positions) != num_channels:
-        raise ValueError(f"Hardware mismatch: Tried to map {len(positions)} positions to {num_channels} channels.")
+    if len(valid_channel_indices) == 0:
+        raise ValueError("Error: No valid channels found to map.")
 
     probe_mea.set_contacts(
         positions=np.array(positions), 
         shapes='circle', 
         shape_params={'radius': radius}
     )
-    probe_mea.set_device_channel_indices(np.arange(num_channels))
+
+    probe_mea.set_device_channel_indices(valid_channel_indices)
     return probe_mea
 
 # =========================================================
@@ -64,7 +71,7 @@ sorter_name = 'mountainsort5'
 # Sorter parameters dictionary
 # You can modify any parameter here without touching the program's logic
 sorter_params = {
-    'detect_threshold': 3.0,                            # Sensitivity for detecting spikes (previously 3.0)
+    'detect_threshold': 4.0,                            # Sensitivity for detecting spikes (previously 3.0)
     'detect_sign': -1,                                  # -1 looks for negative peaks (standard extracellular)
     'n_jobs': -1,                                       # -1 uses all CPU cores (num_workers for MS4 and n_jobs for MS5)
     'filter': False,                                    # IMPORTANT: False because we already filter in Phase 2
@@ -142,8 +149,12 @@ if __name__ == '__main__':
     print(f"Loaded channels: {num_channels}")
 
     # Use the helper function to assign the spatial map
-    probe = create_probe(is_mea=MEA_probe, num_channels=num_channels)
+    file_type = 'h5' if selected_file_paths[0].endswith('.h5') else 'rhs'
+
+    probe = create_probe(is_mea=MEA_probe, file_type=file_type, num_channels=num_channels)
     recording = recording.set_probe(probe)
+
+    print(f"Effective channels for sorting (Grounds removed): {recording.get_num_channels()}")
 
     # =========================================================
     # PHASE 2: SPIKE SORTING

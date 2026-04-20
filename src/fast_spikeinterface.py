@@ -1,6 +1,6 @@
 import numpy as np
 import os
-import glob
+import json
 import tkinter as tk
 from tkinter import filedialog, simpledialog
 
@@ -24,19 +24,22 @@ def create_probe(is_mea, num_channels, pitch=200, radius=15):
         linear_probe.set_device_channel_indices(np.arange(num_channels))
         return linear_probe
 
+    json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mea_mapping.json')
+    with open(json_path, 'r') as f:
+        mea_mapping = json.load(f)
+    
+    list_2_map = [str(x) for x in mea_mapping["channel_mapping"]]
+    print(list_2_map)
+    
     print(f"Assigning MEA spatial map for {num_channels} channels...")
     probe_mea = pi.Probe(ndim=2, si_units='um')
     positions = []
     
-    for y in range(8):
-        for x in range(8):
-            # If the device has 60 channels, omit the 4 corners of the 8x8 grid
-            if num_channels == 60:
-                if (x == 0 and y == 0) or (x == 0 and y == 7) or (x == 7 and y == 0) or (x == 7 and y == 7):
-                    continue
-            # If it has 64 channels, this condition is not met and saves all 64 points
-            
-            positions.append([x * pitch, y * pitch])
+    for num in list_2_map:
+        x = (int(num[0]) - 1) * pitch
+        y = (int(num[1]) - 1) * pitch
+        
+        positions.append([x, y])
 
     # Safety check
     if len(positions) != num_channels:
@@ -56,14 +59,14 @@ def create_probe(is_mea, num_channels, pitch=200, radius=15):
 
 # General settings
 MEA_probe = True
-sorter_name = 'mountainsort4' 
+sorter_name = 'mountainsort5' 
 
 # Sorter parameters dictionary
 # You can modify any parameter here without touching the program's logic
 sorter_params = {
-    'detect_threshold': 2.5,                            # Sensitivity for detecting spikes (previously 3.0)
+    'detect_threshold': 3.0,                            # Sensitivity for detecting spikes (previously 3.0)
     'detect_sign': -1,                                  # -1 looks for negative peaks (standard extracellular)
-    'num_workers': -1,                                       # -1 uses all CPU cores (num_workers for MS4 and n_jobs for MS5)
+    'n_jobs': -1,                                       # -1 uses all CPU cores (num_workers for MS4 and n_jobs for MS5)
     'filter': False,                                    # IMPORTANT: False because we already filter in Phase 2
     'whiten': True,                                     # Spatial noise whitening
     'scheme2_training_duration_sec': 600,               # 
@@ -75,7 +78,7 @@ sorter_params = {
 # =========================================================
 if __name__ == '__main__':
     
-    # 1. FILE SELECTION UI
+    # FILE SELECTION UI
     root = tk.Tk()
     root.withdraw()
 

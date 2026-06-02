@@ -23,14 +23,15 @@ def create_probe(is_mea, file_type, num_channels, pitch=200, radius=15):
     with open(json_path, 'r') as f:
         mea_mapping = json.load(f)
     
+    # Assign the map depending on the file (assuming mcd uses the same as h5)
     map_key = "channel_mapping_rhs" if file_type == 'rhs' else "channel_mapping_h5"
-    list_2_map = mea_mapping[map_key]
+    channel_map_list = mea_mapping[map_key]
 
     print(f"Assigning MEA spatial map for {num_channels} channels...")
     probe_mea = pi.Probe(ndim=2, si_units='um')
     positions, valid_channel_indices = [], []
     
-    for i, num in enumerate(list_2_map):
+    for i, num in enumerate(channel_map_list):
         num_str = str(num)
         if num_str == '0':
             continue
@@ -57,13 +58,18 @@ def create_probe(is_mea, file_type, num_channels, pitch=200, radius=15):
 # =========================================================
 if __name__ == '__main__':
     
-    # 1. INTERFAZ DE SELECCIÓN
+    # 1. SELECTION INTERFACE
     root = tk.Tk()
     root.withdraw()
 
     selected_file_paths = filedialog.askopenfilenames(
         title="Select recording files to PREPROCESS and EXPORT",
-        filetypes=[("H5/RHS files", "*.h5 *.rhs"), ("H5 files", "*.h5"), ("RHS files", "*.rhs")]
+        filetypes=[
+            ("All supported files", "*.h5 *.rhs *.mcd"), 
+            ("H5 files", "*.h5"), 
+            ("RHS files", "*.rhs"),
+            ("MCD files", "*.mcd")
+        ]
     )
 
     if not selected_file_paths:
@@ -79,8 +85,10 @@ if __name__ == '__main__':
 
     input_folder = os.path.dirname(selected_file_paths[0])
     
-    # 2. CARGA Y CONCATENACIÓN
+    # 2. LOADING AND CONCATENATION
     recording_list = []
+    
+    # Handling .h5 files
     if selected_file_paths[0].endswith('.h5'):
         print(f"Loading {len(selected_file_paths)} H5 file(s)...")
         for full_file_path in selected_file_paths:
@@ -89,13 +97,25 @@ if __name__ == '__main__':
                 recording_list.append(rec)
             except Exception as e:
                 print(f"  -> WARNING: Skipping '{os.path.basename(full_file_path)}'. Error: {e}")
-     
+                
+    # Handling .rhs files
     elif selected_file_paths[0].endswith('.rhs'):
         print(f"Loading {len(selected_file_paths)} RHS file(s)...")
         for full_file_path in selected_file_paths:
             rec = se.read_intan(full_file_path, stream_id='0')
             rec = spre.unsigned_to_signed(rec)
             recording_list.append(rec)
+            
+    # Handling .mcd files
+    elif selected_file_paths[0].endswith('.mcd'):
+        print(f"Loading {len(selected_file_paths)} MCD file(s)...")
+        for full_file_path in selected_file_paths:
+            try:
+                # SpikeInterface uses neo.rawio.MCDRawIO under the hood
+                rec = se.read_mcd(full_file_path)
+                recording_list.append(rec)
+            except Exception as e:
+                print(f"  -> WARNING: Skipping '{os.path.basename(full_file_path)}'. Error: {e}")
     
     if not recording_list:
         print("\nError: No valid recordings were loaded. Operation canceled.")
@@ -104,37 +124,48 @@ if __name__ == '__main__':
     recording = sc.concatenate_recordings(recording_list) if len(recording_list) > 1 else recording_list[0]
     num_channels = recording.get_num_channels()
 
-    file_type = 'h5' if selected_file_paths[0].endswith('.h5') else 'rhs'
+    # Determine the file type to pass to the mapping
+    if selected_file_paths[0].endswith('.h5'):
+        file_type = 'h5'
+    elif selected_file_paths[0].endswith('.rhs'):
+        file_type = 'rhs'
+    else:
+        file_type = 'mcd'
+
     probe = create_probe(is_mea=True, file_type=file_type, num_channels=num_channels)
     recording = recording.set_probe(probe)
 
-    # 3. PREPROCESAMIENTO (Limpieza de ruido)
+    # 3. PREPROCESSING (Noise cleaning)
     print("\nApplying bandpass filter (300-6000 Hz)...")
     recording = spre.bandpass_filter(recording, freq_min=300, freq_max=6000)
 
-    # 4. EXPORTACIÓN PARA TRIDESCLOUS NATIVO
+    # 4. EXPORT FOR NATIVE TRIDESCLOUS
     fs = recording.get_sampling_frequency()
     export_folder = os.path.join(input_folder, f"tdc_ready_{custom_name}")
     print(f"\nExporting clean data to: {export_folder}")
 
-    # Guarda el registro en formato binario (.raw)
+    # Save recording in binary format (.raw)
     recording_saved = recording.save(folder=export_folder, format='binary', n_jobs=-1, overwrite=True)
     
-    # Guarda el mapa de electrodos en formato .prb (nativo de Tridesclous)
+    # Save electrode map in .prb format (native for Tridesclous)
     probegroup = pi.ProbeGroup()
+
+    # Reset the indices from 0 to 58 to match the newly saved binary file
+    probe.set_device_channel_indices(np.arange(recording_saved.get_num_channels()))
     probegroup.add_probe(probe)
     
     prb_path = os.path.join(export_folder, "mea_probe.prb")
     pi.write_prb(prb_path, probegroup)
 
     print("\n" + "="*50)
-    print("¡EXPORTACIÓN FINALIZADA CON ÉXITO!")
+    print("EXPORT SUCCESSFULLY COMPLETED!")
     print("="*50)
-    print("Tus datos limpios y mapeados están listos para la GUI de Tridesclous.")
-    print("\nCUANDO ABRAS 'tdc' Y CREES UN NUEVO DATASET, USA ESTOS PARÁMETROS:")
-    print(f"Archivo de datos: {export_folder}/traces_cached_seg0.raw")
-    print(f"Frecuencia de muestreo (Sample Rate): {fs}")
-    print(f"Número de canales (Num Channels): {recording.get_num_channels()}")
-    print(f"Formato de datos (dtype): float32 (¡Importante! El filtro lo cambió a float32)")
-    print(f"Archivo de geometría (PRB): {prb_path}")
+    print("Your cleaned and mapped data is ready for the Tridesclous GUI.")
+    print("\nWHEN YOU OPEN 'tdc' AND CREATE A NEW DATASET (Initialize Dataset), USE THESE PARAMETERS:")
+    print(f"Format: Raw data")
+    print(f"Data file (Filenames): {export_folder}/traces_cached_seg0.raw")
+    print(f"Sample Rate: {fs}")
+    print(f"Num Channels: {recording.get_num_channels()}")
+    print(f"Data dtype: float32")
+    print(f"In the 'Geometry' tab, load the file: {prb_path}")
     print("="*50)

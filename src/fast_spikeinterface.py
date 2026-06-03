@@ -71,7 +71,7 @@ sorter_name = 'mountainsort5'
 # Sorter parameters dictionary
 # You can modify any parameter here without touching the program's logic
 sorter_params = {
-    'detect_threshold': 3.0,                            # Sensitivity for detecting spikes (previously 3.0)
+    'detect_threshold': 4.0,                            # Sensitivity for detecting spikes (previously 3.0)
     'detect_sign': -1,                                  # -1 looks for negative peaks (standard extracellular)
     'n_jobs': -1,                                       # -1 uses all CPU cores (num_workers for MS4 and n_jobs for MS5)
     'filter': False,                                    # IMPORTANT: False because we already filter in Phase 2
@@ -226,26 +226,33 @@ if __name__ == '__main__':
     print(f"Effective channels for sorting (Grounds removed): {recording.get_num_channels()}")
 
     # =========================================================
-    # PHASE 2: SPIKE SORTING
+    # PHASE 2: SPIKE SORTING (OPTIMIZADO PARA RAM)
     # =========================================================
     print("Applying chained preprocessing...")
     recording = spre.bandpass_filter(recording, freq_min=300, freq_max=6000)
 
+    # 1. Guardar el archivo filtrado en el disco duro (¡El salvavidas de la RAM!)
+    cached_folder = os.path.join(output_folder, f"cached_binary_{custom_name}")
+    print(f"Saving preprocessed data to disk (This prevents memory crashes)...")
+    
+    # job_kwargs controla cómo se guarda sin saturar la memoria
+    job_kwargs = dict(n_jobs=2, chunk_duration="1s", progress_bar=True)
+    recording_saved = recording.save(folder=cached_folder, format='binary', overwrite=True, **job_kwargs)
+
     print(f"\nStarting {sorter_name}...")
     
-    # Run the sorter injecting the dictionary (**sorter_params)
+    # 2. Correr el sorter usando el archivo GUARDADO (recording_saved)
     sorting_result = ss.run_sorter(
         sorter_name=sorter_name,
-        recording=recording,
+        recording=recording_saved,  # <--- Usamos el dato optimizado
         folder=sorting_output_folder,  
         remove_existing_folder=True,
-        **sorter_params  # sorter parameters here
+        **sorter_params  
     )
 
     found_units = sorting_result.get_unit_ids()
     print("\n=== Sorting Finished ===")
     print(f"Potential neurons (clusters) found: {len(found_units)}")
-    print(f"Unit IDs: {found_units}")
 
     # =========================================================
     # PHASE 3: WAVEFORM EXTRACTION
@@ -253,7 +260,7 @@ if __name__ == '__main__':
     print("\nCreating the waveform analyzer (SortingAnalyzer)...")
     analyzer = sc.create_sorting_analyzer(
         sorting=sorting_result,
-        recording=recording,
+        recording=recording_saved,
         format="binary_folder",
         folder=waveforms_folder,
         overwrite=True
@@ -261,6 +268,6 @@ if __name__ == '__main__':
 
     print("Computing spikes and extracting waveforms...")
     analyzer.compute("random_spikes", method="uniform", max_spikes_per_unit=500)
-    analyzer.compute("waveforms", ms_before=1.0, ms_after=2.0)                   
+    analyzer.compute("waveforms", ms_before=1.0, ms_after=2.0, **job_kwargs)                   
     analyzer.compute("templates")                                                
     print("Waveforms successfully extracted!")

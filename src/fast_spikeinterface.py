@@ -12,7 +12,7 @@ import spikeinterface.widgets as sw
 import probeinterface as pi
 
 # =========================================================
-# HELPER FUNCTIONS
+# PROBE 
 # =========================================================
 def create_probe(is_mea, file_type, num_channels, pitch=200, radius=15):
     """
@@ -61,93 +61,36 @@ def create_probe(is_mea, file_type, num_channels, pitch=200, radius=15):
     return probe_mea
 
 # =========================================================
-# GENERAL AND SORTER PARAMETERS (EDIT ZONE)
+# GENERAL AND SORTER PARAMETERS 
 # =========================================================
 
 # General settings
 MEA_probe = True
-sorter_name = 'mountainsort5' 
 
-# Sorter parameters dictionary
-# You can modify any parameter here without touching the program's logic
+# # Sorter parameters dictionary for mountsort5
+# sorter_name = 'mountainsort5'   
+# sorter_params = {
+#     'detect_threshold': 4.0,                            
+#     'detect_sign': -1,                                  
+#     'n_jobs': -1,                                       
+#     'filter': False,                                    
+#     'whiten': True,          
+#     'scheme2_training_duration_sec': 600,               
+#     'scheme2_max_num_snippets_per_training_batch': 500,
+#     'npca_per_channel': 3,   
+#     'snippet_T1': 20,         
+#     'snippet_T2': 20
+# }
+
+# Sorter parameters dictionary for Kilosort4
+sorter_name = 'kilosort4'
 sorter_params = {
-    'detect_threshold': 4.0,                            # Sensitivity for detecting spikes (previously 3.0)
-    'detect_sign': -1,                                  # -1 looks for negative peaks (standard extracellular)
-    'n_jobs': -1,                                       # -1 uses all CPU cores (num_workers for MS4 and n_jobs for MS5)
-    'filter': False,                                    # IMPORTANT: False because we already filter in Phase 2
-    'whiten': True,                                     # Spatial noise whitening
-    'scheme2_training_duration_sec': 600,               # 
-    'scheme2_max_num_snippets_per_training_batch': 500,
-    'npca_per_channel': 5,                              # FORCE AMPLITUDE SEPARATION
-    'snippet_T1': 30,                                   # Extend the analysis window before the peak
-    'snippet_T2': 30
+    'n_jobs': -1, 
+    'do_CAR': True,         # Common Average Reference
+    'Th_universal': 9.0,    # Main threshold for detecting spikes (default is usually 9.0)
+    # 'Th_learned': 8.0,    # Secondary threshold for template learning
+    # 'batch_size': 60000,  # Batch size, sometimes lowered if you have GPU memory (VRAM) issues
 }
-
-# ==============================================================================
-# MOUNTAINSORT 5: COMPLETE PARAMETER REFERENCE
-# ==============================================================================
-
-# 1. Detection Parameters (Signal Search)
-# ------------------------------------------------------------------------------
-# 'detect_threshold' (5.5): Statistical threshold. The spike must be 5.5 times 
-#                           larger than the Median Absolute Deviation (background 
-#                           noise) to be detected.
-# 'detect_sign' (-1):       Spike direction. -1 looks for valleys (negative peaks, 
-#                           standard for extracellular recordings), 1 looks for 
-#                           positive peaks, 0 looks for both.
-# 'detect_time_radius_msec' (0.5): Blind refractory period (in milliseconds). 
-#                                  After detecting a peak, it ignores extra 
-#                                  fluctuations for half a millisecond to avoid 
-#                                  counting the same spike twice.
-
-# 2. Waveform Parameters
-# ------------------------------------------------------------------------------
-# 'snippet_T1' (20) & 'snippet_T2' (20): Defines the time window the algorithm 
-#                                        "snips" before (T1) and after (T2) the 
-#                                        negative peak to analyze the spike shape. 
-#                                        20 samples depend on your sampling frequency.
-# 'snippet_mask_radius' (250): Radius (in micrometers). Defines how far it will 
-#                              look in neighboring electrodes to reconstruct the 
-#                              full signal of the same neuron across space.
-
-# 3. Mathematical and Clustering Parameters
-# ------------------------------------------------------------------------------
-# 'scheme' ('2'): MS5 has different training phases. Scheme 2 is the recommended 
-#                 one because it divides the process into detection, feature 
-#                 training, and clustering.
-# 'npca_per_channel' (3): Principal Components per channel. The algorithm 
-#                         summarizes the waveform into 3 key mathematical values. 
-#                         (Increase to 4 or 5 to separate spikes of different amplitudes).
-# 'scheme1_...', 'scheme2_...': Detection Radii. Defines how large the electrode 
-#                               "neighborhoods" are that are analyzed together in 
-#                               each training phase.
-# 'scheme2_training_duration_sec' (300): Takes 5 minutes of your data to learn 
-#                                        what the neurons look like and build 
-#                                        the initial clusters.
-# 'scheme2_training_recording_sampling_mode' ('uniform'): Extracts those 5 minutes 
-#                                                         by taking small snippets 
-#                                                         from the entire file 
-#                                                         uniformly, not just from 
-#                                                         the first 5 minutes.
-
-# 4. Built-in Filters (Preprocessing)
-# ------------------------------------------------------------------------------
-# 'filter' (True): Applies an internal bandpass filter. (Remember to set it to 
-#                  False in your code if you already do this in Phase 2).
-# 'freq_min' (300) & 'freq_max' (6000): The limits of that filter in Hz.
-# 'whiten' (True): Spatial whitening. Reduces the background noise shared between 
-#                  neighboring electrodes.
-
-# 5. Performance and Computing
-# ------------------------------------------------------------------------------
-# 'n_jobs' (1): BE CAREFUL HERE! MS5 went back to calling this parameter 'n_jobs' 
-#               (unlike MS4, which used 'num_workers'). Set it to -1 in your 
-#               dictionary to use all your CPU cores.
-# 'chunk_duration' ('1s'): Loads the recording into RAM in 1-second chunks to 
-#                          prevent your PC from crashing.
-# 'delete_temporary_recording' (True): Deletes large temporary files after finishing.
-
-# ==============================================================================
 
 # =========================================================
 # MAIN
@@ -182,7 +125,7 @@ if __name__ == '__main__':
     waveforms_folder = os.path.join(output_folder, f"waveforms_{custom_name}")
 
     # =========================================================
-    # PHASE 1: DATA LOADING AND GEOMETRY
+    # DATA LOADING AND GEOMETRY
     # =========================================================
     recording_list = []
 
@@ -208,7 +151,7 @@ if __name__ == '__main__':
         print("\nError: No valid recordings were loaded. Operation canceled.")
         exit()
 
-    # One o more files
+    # One or more files
     if len(recording_list) > 1:
         recording = sc.concatenate_recordings(recording_list)
     else:
@@ -226,25 +169,25 @@ if __name__ == '__main__':
     print(f"Effective channels for sorting (Grounds removed): {recording.get_num_channels()}")
 
     # =========================================================
-    # PHASE 2: SPIKE SORTING (OPTIMIZADO PARA RAM)
+    # SPIKE SORTING (OPTIMIZED FOR RAM)
     # =========================================================
     print("Applying chained preprocessing...")
     recording = spre.bandpass_filter(recording, freq_min=300, freq_max=6000)
 
-    # 1. Guardar el archivo filtrado en el disco duro (¡El salvavidas de la RAM!)
+    # save the filtered file to the hard drive
     cached_folder = os.path.join(output_folder, f"cached_binary_{custom_name}")
     print(f"Saving preprocessed data to disk (This prevents memory crashes)...")
     
-    # job_kwargs controla cómo se guarda sin saturar la memoria
+    # job_kwargs controls how it's saved without saturating memory
     job_kwargs = dict(n_jobs=2, chunk_duration="1s", progress_bar=True)
     recording_saved = recording.save(folder=cached_folder, format='binary', overwrite=True, **job_kwargs)
 
     print(f"\nStarting {sorter_name}...")
     
-    # 2. Correr el sorter usando el archivo GUARDADO (recording_saved)
+    # run the sorter using the saved file (recording_saved)
     sorting_result = ss.run_sorter(
         sorter_name=sorter_name,
-        recording=recording_saved,  # <--- Usamos el dato optimizado
+        recording=recording_saved, 
         folder=sorting_output_folder,  
         remove_existing_folder=True,
         **sorter_params  
@@ -255,7 +198,7 @@ if __name__ == '__main__':
     print(f"Potential neurons (clusters) found: {len(found_units)}")
 
     # =========================================================
-    # PHASE 3: WAVEFORM EXTRACTION
+    # WAVEFORM EXTRACTION
     # =========================================================
     print("\nCreating the waveform analyzer (SortingAnalyzer)...")
     analyzer = sc.create_sorting_analyzer(

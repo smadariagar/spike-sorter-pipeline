@@ -11,8 +11,6 @@ print("Loading data analyzer...")
 root = tk.Tk()
 root.withdraw()
 
-# FOLDER SELECTION
-# Added 'mustexist=True' and a much clearer title
 selected_folder_path = filedialog.askdirectory(
     title="Select the specific 'waveforms_...' folder (Click once and press OK)",
     mustexist=True

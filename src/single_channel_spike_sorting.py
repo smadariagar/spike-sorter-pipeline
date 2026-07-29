@@ -3,8 +3,7 @@ import os
 import json
 import tkinter as tk
 from tkinter import filedialog, simpledialog
-import pandas as pd # <-- NUEVO: Para guardar los datos fácilmente
-
+import pandas as pd
 import spikeinterface.extractors as se
 import spikeinterface.preprocessing as spre
 import spikeinterface.sorters as ss
@@ -66,11 +65,22 @@ MEA_probe = True
 # USAMOS MOUNTAINSORT5 (Mejor para single-channel sorting)
 sorter_name = 'mountainsort5'   
 sorter_params = {
-    'detect_threshold': 4.0,                            
-    'detect_sign': -1,                                  
-    'filter': False, # Ya filtramos antes                                   
-    'whiten': True,          
+    'detect_threshold': 4.0,    # 4.0                            
+    'detect_sign': -1,           # -1                          
+    'filter': False,    
+    'whiten': False,            # True                 
 }
+
+# # USAMOS TRIDESCLOUS
+# sorter_name = 'tridesclous'   
+# sorter_params = {
+#     'detect_sign': -1,            # -1 para espigas negativas, 1 para positivas, 0 para ambas
+#     'radius_um': 0.0,        
+#     'detect_threshold': 2.5 , #4.0,      # Umbral de detección (ajusta según el nivel de ruido de tu MEA)
+#     'freq_min': 300.0,            # Tridesclous maneja su propio filtrado internamente
+#     'freq_max': 6000.0,
+#     'common_ref_removal': False   # Desactivado porque estás aislando y procesando un solo canal a la vez
+# }
 
 # =========================================================
 # MAIN
@@ -98,7 +108,7 @@ if __name__ == '__main__':
         exit()
 
     input_folder = os.path.dirname(selected_file_paths[0])
-    output_folder = os.path.join(input_folder, f'single_channel_sorting_{custom_name}/')
+    output_folder = os.path.join(input_folder, f'single_channel_sorting/{custom_name}/')
     os.makedirs(output_folder, exist_ok=True)
 
     # 2. DATA LOADING AND GEOMETRY

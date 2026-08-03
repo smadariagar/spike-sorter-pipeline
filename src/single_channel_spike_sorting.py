@@ -62,25 +62,22 @@ def create_probe(is_mea, file_type, num_channels, pitch=200, radius=15):
 # =========================================================
 MEA_probe = True
 
-# USAMOS MOUNTAINSORT5 (Mejor para single-channel sorting)
-sorter_name = 'mountainsort5'   
-sorter_params = {
-    'detect_threshold': 4.0,    # 4.0                            
-    'detect_sign': -1,           # -1                          
-    'filter': False,    
-    'whiten': False,            # True                 
-}
-
-# # USAMOS TRIDESCLOUS
-# sorter_name = 'tridesclous'   
+# # USAMOS MOUNTAINSORT5 (Mejor para single-channel sorting)
+# sorter_name = 'mountainsort5'   
 # sorter_params = {
-#     'detect_sign': -1,            # -1 para espigas negativas, 1 para positivas, 0 para ambas
-#     'radius_um': 0.0,        
-#     'detect_threshold': 2.5 , #4.0,      # Umbral de detección (ajusta según el nivel de ruido de tu MEA)
-#     'freq_min': 300.0,            # Tridesclous maneja su propio filtrado internamente
-#     'freq_max': 6000.0,
-#     'common_ref_removal': False   # Desactivado porque estás aislando y procesando un solo canal a la vez
+#     'detect_threshold': 3.5,    # 4.0                            
+#     'detect_sign': -1,           # -1                          
+#     'filter': False,    
+#     'whiten': True                 
 # }
+
+# USAMOS TRIDESCLOUS
+sorter_name = 'tridesclous'   
+sorter_params = {
+    'detect_sign': -1,            # -1 para espigas negativas, 1 para positivas, 0 para ambas
+    'detect_threshold': 3.5,      # Umbral de detección (ajusta según el nivel de ruido de tu MEA)
+    'common_ref_removal': False   # Desactivado porque estás aislando y procesando un solo canal a la vez
+}
 
 # =========================================================
 # MAIN

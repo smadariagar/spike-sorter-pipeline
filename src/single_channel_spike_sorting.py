@@ -9,6 +9,8 @@ import spikeinterface.preprocessing as spre
 import spikeinterface.sorters as ss
 import spikeinterface.core as sc
 import probeinterface as pi
+import shutil  # <-- IMPORTANTE: Añadimos shutil para poder borrar carpetas
+import gc      # <-- IMPORTANTE: Añadimos gc para liberar memoria antes de borrar
 
 # =========================================================
 # PROBE 
@@ -72,14 +74,6 @@ sorter_params = {
     'whiten': True                 
 }
 
-# # USAMOS TRIDESCLOUS
-# sorter_name = 'tridesclous'   
-# sorter_params = {
-#     'detect_sign': -1,            # -1 para espigas negativas, 1 para positivas, 0 para ambas
-#     'detect_threshold': 3.5,      # Umbral de detección (ajusta según el nivel de ruido de tu MEA)
-#     'common_ref_removal': False   # Desactivado porque estás aislando y procesando un solo canal a la vez
-# }
-
 # =========================================================
 # MAIN
 # =========================================================
@@ -130,7 +124,6 @@ if __name__ == '__main__':
         for key, value in sorter_params.items():
             f.write(f" * {key}: {value}\n")
     print(f"Summary file created at: {summary_txt_path}")
-    # =========================================================
 
     # 2. DATA LOADING AND GEOMETRY
     recording_list = []
@@ -166,6 +159,7 @@ if __name__ == '__main__':
     print("Applying chained preprocessing...")
     recording = spre.bandpass_filter(recording, freq_min=300, freq_max=6000)
 
+    # Se guarda temporalmente en disco para que el sorter funcione eficientemente
     cached_folder = os.path.join(output_folder, "cached_binary_full")
     print(f"Saving preprocessed full data to disk...")
     job_kwargs = dict(n_jobs=-1, chunk_duration="1s", progress_bar=True)
@@ -184,13 +178,10 @@ if __name__ == '__main__':
     for chan_id in channel_ids:
         print(f"\n---> Processing Channel ID: {chan_id}")
         
-        # Aislar solo este canal
         rec_single_chan = recording_saved.select_channels(channel_ids=[chan_id])
-        
         chan_output_folder = os.path.join(output_folder, f"sorting_ch_{chan_id}")
         
         try:
-            # Correr el sorter solo en este canal
             sorting_result = ss.run_sorter(
                 sorter_name=sorter_name,
                 recording=rec_single_chan, 
@@ -202,11 +193,8 @@ if __name__ == '__main__':
             found_units = sorting_result.get_unit_ids()
             print(f"     Found {len(found_units)} units in channel {chan_id}")
             
-            # Extraer tiempos de espigas y guardarlos en nuestra lista maestra
             for unit_idx, unit_id in enumerate(found_units):
-                # Generamos un ID único global, ej: "Ch47_U0"
                 global_unit_id = f"Ch{chan_id}_U{unit_idx}"
-                
                 spike_frames = sorting_result.get_unit_spike_train(unit_id)
                 
                 for frame in spike_frames:
@@ -219,6 +207,11 @@ if __name__ == '__main__':
                     
         except Exception as e:
             print(f"     [ERROR] Sorter failed on channel {chan_id}. Skipping. Error: {e}")
+            
+        finally:
+            # ---> LIMPIEZA INMEDIATA 1: Borrar la carpeta del sorter de este canal
+            if os.path.exists(chan_output_folder):
+                shutil.rmtree(chan_output_folder, ignore_errors=True)
 
     # =========================================================
     # 5. EXPORT FINAL CONSOLIDATED DATA
@@ -227,7 +220,6 @@ if __name__ == '__main__':
         print("\n=== All channels processed. Saving consolidated data ===")
         df_spikes = pd.DataFrame(all_spikes_data)
         
-        # Ordenar por tiempo de ocurrencia
         df_spikes = df_spikes.sort_values(by='Spike_Time_Seconds').reset_index(drop=True)
         
         csv_path = os.path.join(output_folder, f"all_spikes_consolidated_{custom_name}.csv")
@@ -237,3 +229,19 @@ if __name__ == '__main__':
         print(f"Data saved to: {csv_path}")
     else:
         print("\nNo spikes were found in any channel.")
+
+    # =========================================================
+    # 6. LIMPIEZA FINAL DEL CACHÉ BINARIO
+    # =========================================================
+    print("\n[+] Cleaning up heavy temporary binary files...")
+    # Desenlazamos la variable recording_saved y forzamos a Python a soltar los archivos
+    del recording_saved   
+    gc.collect()          
+    
+    # Borramos la carpeta gigante
+    if os.path.exists(cached_folder):
+        try:
+            shutil.rmtree(cached_folder, ignore_errors=True)
+            print("    -> Cached binary deleted successfully. Storage space recovered!")
+        except Exception as e:
+            print(f"    -> Could not completely delete cached binary. Please remove it manually if needed. Error: {e}")

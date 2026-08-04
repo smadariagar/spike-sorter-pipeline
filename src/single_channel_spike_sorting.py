@@ -62,22 +62,23 @@ def create_probe(is_mea, file_type, num_channels, pitch=200, radius=15):
 # =========================================================
 MEA_probe = True
 
-# # USAMOS MOUNTAINSORT5 (Mejor para single-channel sorting)
-# sorter_name = 'mountainsort5'   
-# sorter_params = {
-#     'detect_threshold': 3.5,    # 4.0                            
-#     'detect_sign': -1,           # -1                          
-#     'filter': False,    
-#     'whiten': True                 
-# }
-
-# USAMOS TRIDESCLOUS
-sorter_name = 'tridesclous'   
+# USAMOS MOUNTAINSORT5 (Mejor para single-channel sorting)
+sorter_name = 'mountainsort5'   
 sorter_params = {
-    'detect_sign': -1,            # -1 para espigas negativas, 1 para positivas, 0 para ambas
-    'detect_threshold': 3.5,      # Umbral de detección (ajusta según el nivel de ruido de tu MEA)
-    'common_ref_removal': False   # Desactivado porque estás aislando y procesando un solo canal a la vez
+    'detect_threshold': 5.0,    # 4.0 
+    'n_jobs': -1,                              
+    'detect_sign': -1,           # -1                          
+    'filter': False,    
+    'whiten': True                 
 }
+
+# # USAMOS TRIDESCLOUS
+# sorter_name = 'tridesclous'   
+# sorter_params = {
+#     'detect_sign': -1,            # -1 para espigas negativas, 1 para positivas, 0 para ambas
+#     'detect_threshold': 3.5,      # Umbral de detección (ajusta según el nivel de ruido de tu MEA)
+#     'common_ref_removal': False   # Desactivado porque estás aislando y procesando un solo canal a la vez
+# }
 
 # =========================================================
 # MAIN
@@ -107,6 +108,29 @@ if __name__ == '__main__':
     input_folder = os.path.dirname(selected_file_paths[0])
     output_folder = os.path.join(input_folder, f'single_channel_sorting/{custom_name}/')
     os.makedirs(output_folder, exist_ok=True)
+
+    # =========================================================
+    # 1.5 GENERAR ARCHIVO DE RESUMEN (HEADER)
+    # =========================================================
+    summary_txt_path = os.path.join(output_folder, f"analysis_summary_{custom_name}.txt")
+    with open(summary_txt_path, 'w', encoding='utf-8') as f:
+        f.write("=========================================================\n")
+        f.write("              SPIKE SORTING ANALYSIS SUMMARY             \n")
+        f.write("=========================================================\n\n")
+        f.write(f"Session Name: {custom_name}\n\n")
+        
+        f.write("--- FILES USED ---\n")
+        for file_path in selected_file_paths:
+            f.write(f" * {os.path.basename(file_path)}\n")
+            f.write(f"   (Path: {file_path})\n")
+        
+        f.write("\n--- SORTER CONFIGURATION ---\n")
+        f.write(f"Algorithm: {sorter_name}\n")
+        f.write("Parameters:\n")
+        for key, value in sorter_params.items():
+            f.write(f" * {key}: {value}\n")
+    print(f"Summary file created at: {summary_txt_path}")
+    # =========================================================
 
     # 2. DATA LOADING AND GEOMETRY
     recording_list = []

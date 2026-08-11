@@ -12,9 +12,7 @@ import probeinterface as pi
 import shutil  # <-- IMPORTANTE: Añadimos shutil para poder borrar carpetas
 import gc      # <-- IMPORTANTE: Añadimos gc para liberar memoria antes de borrar
 
-# =========================================================
 # PROBE 
-# =========================================================
 def create_probe(is_mea, file_type, num_channels, pitch=200, radius=15):
     """
     Genera el mapa de electrodos. Se mantiene igual a tu versión original.
@@ -64,15 +62,24 @@ def create_probe(is_mea, file_type, num_channels, pitch=200, radius=15):
 # =========================================================
 MEA_probe = True
 
-# USAMOS MOUNTAINSORT5 (Mejor para single-channel sorting)
+# USAMOS MOUNTAINSORT5 
 sorter_name = 'mountainsort5'   
 sorter_params = {
-    'detect_threshold': 5.0,    # 4.0 
+    'detect_threshold': 4.0,    # 4.0 
     'n_jobs': -1,                              
     'detect_sign': -1,           # -1                          
     'filter': False,    
     'whiten': True                 
 }
+
+# # USAMOS TRIDESCLOUS
+# sorter_name = 'tridesclous'
+# sorter_params = {
+#     'detect_sign': -1,             
+#     'detect_threshold': 4.0,       
+#     'common_ref_removal': False,   # True si quieres restar la mediana común entre canales (CMR)
+#     'n_jobs': -1                   
+# }
 
 # =========================================================
 # MAIN
@@ -103,9 +110,7 @@ if __name__ == '__main__':
     output_folder = os.path.join(input_folder, f'single_channel_sorting/{custom_name}/')
     os.makedirs(output_folder, exist_ok=True)
 
-    # =========================================================
     # 1.5 GENERAR ARCHIVO DE RESUMEN (HEADER)
-    # =========================================================
     summary_txt_path = os.path.join(output_folder, f"analysis_summary_{custom_name}.txt")
     with open(summary_txt_path, 'w', encoding='utf-8') as f:
         f.write("=========================================================\n")
@@ -167,9 +172,7 @@ if __name__ == '__main__':
     
     fs = recording_saved.get_sampling_frequency()
 
-    # =========================================================
     # 4. SINGLE CHANNEL SORTING LOOP
-    # =========================================================
     all_spikes_data = []
     
     channel_ids = recording_saved.get_channel_ids()
@@ -213,9 +216,7 @@ if __name__ == '__main__':
             if os.path.exists(chan_output_folder):
                 shutil.rmtree(chan_output_folder, ignore_errors=True)
 
-    # =========================================================
     # 5. EXPORT FINAL CONSOLIDATED DATA
-    # =========================================================
     if len(all_spikes_data) > 0:
         print("\n=== All channels processed. Saving consolidated data ===")
         df_spikes = pd.DataFrame(all_spikes_data)
@@ -230,9 +231,7 @@ if __name__ == '__main__':
     else:
         print("\nNo spikes were found in any channel.")
 
-    # =========================================================
     # 6. LIMPIEZA FINAL DEL CACHÉ BINARIO
-    # =========================================================
     print("\n[+] Cleaning up heavy temporary binary files...")
     # Desenlazamos la variable recording_saved y forzamos a Python a soltar los archivos
     del recording_saved   

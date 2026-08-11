@@ -118,36 +118,53 @@ if __name__ == '__main__':
     recording = spre.bandpass_filter(recording, freq_min=300, freq_max=6000)
     fs = recording.get_sampling_frequency()
 
-    # =========================================================
-    # 3. CARGAR RESULTADOS DESDE EL CSV
+  # =========================================================
+    # 3. CARGAR RESULTADOS DESDE EL CSV Y FIJAR CANAL
     # =========================================================
     print(f"\nCargando tiempos de espigas desde el CSV...")
     df = pd.read_csv(csv_path)
 
     unit_dict = {}
+    unit_to_channel = {}
+
     for unit_id, group in df.groupby("Neuron_ID"):
         unit_dict[unit_id] = group["Spike_Frame"].to_numpy(dtype=int)
+        # Extraer el canal indicado en el CSV (ej: "Ch0" o sacarlo de "Ch0_U1")
+        channel_name = group["Electrode_ID"].iloc[0] if "Electrode_ID" in group.columns else unit_id.split("_")[0]
+        unit_to_channel[unit_id] = [channel_name]
 
     print(f"Total de unidades aisladas: {len(unit_dict)}")
     unified_sorting = sc.NumpySorting.from_unit_dict([unit_dict], sampling_frequency=fs)
 
+    # Fijar el canal asignado como propiedad directa en el Sorting
+    assigned_channels = [unit_to_channel[uid][0] for uid in unified_sorting.unit_ids]
+    unified_sorting.set_property("channel_id", assigned_channels)
+
     # =========================================================
-    # 4. EXTRACCIÓN Y VISUALIZACIÓN
+    # 4. EXTRACCIÓN Y VISUALIZACIÓN CON CANAL FORZADO
     # =========================================================
     analyzer_folder = os.path.join(folder_path, "unified_analyzer")
 
     if os.path.exists(analyzer_folder):
         shutil.rmtree(analyzer_folder)
 
+    # Crear la esparsidad forzada para que cada unidad use únicamente su canal
+    sparsity = sc.ChannelSparsity.from_unit_id_to_channel_ids(
+        unit_to_channel, 
+        unit_ids=unified_sorting.unit_ids, 
+        channel_ids=recording.get_channel_ids()
+    )
+
     print("\nCreando Analizador Global...")
     analyzer = sc.create_sorting_analyzer(
         sorting=unified_sorting,
         recording=recording,
-        format="memory", # <--- IMPORTANTE: Todo se calcula en RAM
-        folder=None      # <--- IMPORTANTE: No crea carpeta pesada
+        sparsity=sparsity,   # <--- Forzamos a que use el canal fijado
+        format="memory",
+        folder=None
     )
 
-    print("Extrayendo formas de onda (Esto tomará un par de minutos, ten paciencia)...")
+    print("Extrayendo formas de onda y plantillas...")
     job_kwargs = dict(n_jobs=-1, progress_bar=True, chunk_duration="1s")
 
     analyzer.compute("random_spikes", method="uniform", max_spikes_per_unit=500)

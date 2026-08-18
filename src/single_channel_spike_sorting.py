@@ -2,17 +2,19 @@ import numpy as np
 import os
 import json
 import tkinter as tk
-from tkinter import filedialog, simpledialog
+from tkinter import filedialog, simpledialog, messagebox # <-- IMPORTANTE: Añadimos messagebox
 import pandas as pd
 import spikeinterface.extractors as se
 import spikeinterface.preprocessing as spre
 import spikeinterface.sorters as ss
 import spikeinterface.core as sc
 import probeinterface as pi
-import shutil  # <-- IMPORTANTE: Añadimos shutil para poder borrar carpetas
-import gc      # <-- IMPORTANTE: Añadimos gc para liberar memoria antes de borrar
+import shutil  
+import gc      
 
+# =========================================================
 # PROBE 
+# =========================================================
 def create_probe(is_mea, file_type, num_channels, pitch=200, radius=15):
     """
     Genera el mapa de electrodos. Se mantiene igual a tu versión original.
@@ -64,22 +66,27 @@ MEA_probe = True
 
 # USAMOS MOUNTAINSORT5 
 sorter_name = 'mountainsort5'   
-sorter_params = {
-    'detect_threshold': 4.0,    # 4.0 
-    'n_jobs': -1,                              
-    'detect_sign': -1,           # -1                          
-    'filter': False,    
-    'whiten': True                 
-}
 
-# # USAMOS TRIDESCLOUS
-# sorter_name = 'tridesclous'
-# sorter_params = {
-#     'detect_sign': -1,             
-#     'detect_threshold': 4.0,       
-#     'common_ref_removal': False,   # True si quieres restar la mediana común entre canales (CMR)
-#     'n_jobs': -1                   
-# }
+sorter_params = {
+    # 1. Ajuste de Sensibilidad (Ruido Global)
+    'detect_threshold': 4.0,        
+    'detect_sign': -1,              
+    
+    # 2. Ajuste de Overclustering (Drift Fisiológico)
+    'npca_per_channel': 8,          
+    'snippet_T1': 30,               
+    'snippet_T2': 30,               
+    
+    # 3. Ajuste de Entrenamiento (Dilución temporal)
+    'scheme2_training_duration_sec': 900,               
+    'scheme2_max_num_snippets_per_training_batch': 500, 
+    'scheme2_training_recording_sampling_mode': 'uniform', 
+    
+    # 4. Parámetros Generales
+    'filter': False,                
+    'whiten': True,                 
+    'n_jobs': -1                    
+}
 
 # =========================================================
 # MAIN
@@ -106,6 +113,14 @@ if __name__ == '__main__':
         print("No name provided. Operation canceled.")
         exit()
 
+    # ---> NUEVO: Preguntar al usuario si desea guardar el caché pesado
+    keep_cached_binary = messagebox.askyesno(
+        "Conservar Caché Binario", 
+        "¿Deseas conservar la carpeta pesada 'cached_binary_full'?\n\n"
+        "SÍ: Consérvala solo si usarás Phy para curación manual (Ocupará varios GBs).\n"
+        "NO: Bórrala al finalizar para ahorrar espacio en el disco duro."
+    )
+
     input_folder = os.path.dirname(selected_file_paths[0])
     output_folder = os.path.join(input_folder, f'single_channel_sorting/{custom_name}/')
     os.makedirs(output_folder, exist_ok=True)
@@ -116,7 +131,8 @@ if __name__ == '__main__':
         f.write("=========================================================\n")
         f.write("              SPIKE SORTING ANALYSIS SUMMARY             \n")
         f.write("=========================================================\n\n")
-        f.write(f"Session Name: {custom_name}\n\n")
+        f.write(f"Session Name: {custom_name}\n")
+        f.write(f"Kept Binary Cache: {keep_cached_binary}\n\n") # <-- Registramos la decisión
         
         f.write("--- FILES USED ---\n")
         for file_path in selected_file_paths:
@@ -231,16 +247,21 @@ if __name__ == '__main__':
     else:
         print("\nNo spikes were found in any channel.")
 
-    # 6. LIMPIEZA FINAL DEL CACHÉ BINARIO
-    print("\n[+] Cleaning up heavy temporary binary files...")
+    # 6. LIMPIEZA FINAL DEL CACHÉ BINARIO (OPCIONAL SEGÚN DECISIÓN DEL USUARIO)
+    print("\n[+] Managing heavy temporary binary files...")
     # Desenlazamos la variable recording_saved y forzamos a Python a soltar los archivos
     del recording_saved   
     gc.collect()          
     
-    # Borramos la carpeta gigante
-    if os.path.exists(cached_folder):
-        try:
-            shutil.rmtree(cached_folder, ignore_errors=True)
-            print("    -> Cached binary deleted successfully. Storage space recovered!")
-        except Exception as e:
-            print(f"    -> Could not completely delete cached binary. Please remove it manually if needed. Error: {e}")
+    if not keep_cached_binary:
+        # El usuario eligió NO conservar la carpeta (ahorrar espacio)
+        if os.path.exists(cached_folder):
+            try:
+                shutil.rmtree(cached_folder, ignore_errors=True)
+                print("    -> Cached binary deleted successfully. Storage space recovered!")
+            except Exception as e:
+                print(f"    -> Could not completely delete cached binary. Please remove it manually if needed. Error: {e}")
+    else:
+        # El usuario eligió SÍ conservarla para mandarla a Phy luego
+        print(f"    -> Cached binary KEPT at: {cached_folder}")
+        print("    -> (Remember to delete it manually when you are done with Phy export)")

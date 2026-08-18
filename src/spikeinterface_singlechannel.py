@@ -13,7 +13,7 @@ import spikeinterface_gui as sig
 import probeinterface as pi
 
 # =========================================================
-# 0. FUNCION DEL MAPA DE ELECTRODOS (Para reconstruir la data en RAM)
+# 0. FUNCION DEL MAPA DE ELECTRODOS
 # =========================================================
 def create_probe(is_mea, file_type, num_channels, pitch=200, radius=15):
     if not is_mea:
@@ -51,7 +51,6 @@ if __name__ == '__main__':
     root = tk.Tk()
     root.withdraw()
 
-    # A. Seleccionar SOLAMENTE el archivo de resumen (Header)
     summary_path = filedialog.askopenfilename(
         title="1. Selecciona el archivo de resumen (analysis_summary_... .txt)",
         filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
@@ -60,42 +59,45 @@ if __name__ == '__main__':
         print("Operación cancelada.")
         exit()
 
-    # B. Parsear el archivo txt para encontrar las rutas originales
     selected_file_paths = []
     with open(summary_path, 'r', encoding='utf-8') as f:
         for line in f:
             line = line.strip()
-            # Buscamos la línea que guardamos con el formato "(Path: ruta_del_archivo)"
             if line.startswith("(Path:") and line.endswith(")"):
-                # Limpiamos el string para quedarnos solo con la ruta pura
                 file_path = line.replace("(Path:", "").rstrip(")").strip()
-                
-                # Verificamos que el archivo original no haya sido movido o borrado
                 if os.path.exists(file_path):
                     selected_file_paths.append(file_path)
                 else:
                     print(f"[ADVERTENCIA] Archivo original no encontrado en la ruta: {file_path}")
 
+    # Plan de contingencia: si el txt no tiene las rutas (o se movieron), las pedimos a mano
     if not selected_file_paths:
-        print("\n[ERROR] No se encontraron rutas válidas de archivos originales en el resumen.")
-        print("Asegúrate de no haber borrado o movido los archivos .h5 originales.")
-        exit()
+        print("\n[AVISO] No se encontraron rutas válidas. Selecciona los archivos crudos originales (.h5 o .rhs):")
+        manual_paths = filedialog.askopenfilenames(
+            title="Selecciona los archivos crudos originales",
+            filetypes=[("H5/RHS files", "*.h5 *.rhs"), ("All files", "*.*")]
+        )
+        if not manual_paths:
+            print("[ERROR] Operación cancelada.")
+            exit()
+        selected_file_paths = sorted(list(manual_paths))
         
-    print(f"\n[+] Se leyeron {len(selected_file_paths)} archivos originales desde el resumen.")
+    print(f"\n[+] Se leyeron {len(selected_file_paths)} archivos originales.")
 
-    # C. Buscar automáticamente el CSV en la misma carpeta que el txt
     folder_path = os.path.dirname(summary_path)
+
+    # ---> NUEVO: Buscar el CSV generado por tu código anterior automáticamente
     csv_files = [f for f in os.listdir(folder_path) if f.startswith("all_spikes") and f.endswith(".csv")]
-    
     if not csv_files:
-        print(f"\n[ERROR] No se encontró el archivo CSV en la carpeta: {folder_path}")
+        print(f"\n[ERROR] No se encontró el archivo CSV de resultados en la carpeta: {folder_path}")
         exit()
         
     csv_path = os.path.join(folder_path, csv_files[0])
-    print(f"[+] CSV encontrado automáticamente: {os.path.basename(csv_path)}")
+    print(f"[+] CSV de espigas encontrado: {os.path.basename(csv_path)}")
+
 
     # =========================================================
-    # 2. RECONSTRUCCIÓN VIRTUAL "AL VUELO" (CERO USO DE DISCO)
+    # 2. RECONSTRUCCIÓN VIRTUAL "AL VUELO" 
     # =========================================================
     print("\nReconstruyendo grabación desde los originales...")
     recording_list = []
@@ -105,6 +107,10 @@ if __name__ == '__main__':
                 recording_list.append(se.read_mcsh5(full_file_path, stream_id='0'))
             except Exception as e:
                 pass 
+    elif selected_file_paths[0].endswith('.rhs'):
+        for full_file_path in selected_file_paths:
+            rec = se.read_intan(full_file_path, stream_id='0')
+            recording_list.append(spre.unsigned_to_signed(rec))
                 
     recording = sc.concatenate_recordings(recording_list) if len(recording_list) > 1 else recording_list[0]
     num_channels = recording.get_num_channels()
@@ -113,13 +119,12 @@ if __name__ == '__main__':
     probe = create_probe(is_mea=True, file_type=file_type, num_channels=num_channels)
     recording = recording.set_probe(probe)
     
-    # Aplicamos el filtro en la memoria RAM
     print("Aplicando filtro bandpass al vuelo...")
     recording = spre.bandpass_filter(recording, freq_min=300, freq_max=6000)
     fs = recording.get_sampling_frequency()
 
-  # =========================================================
-    # 3. CARGAR RESULTADOS DESDE EL CSV Y FIJAR CANAL
+    # =========================================================
+    # 3. CARGAR RESULTADOS DIRECTAMENTE DESDE EL CSV
     # =========================================================
     print(f"\nCargando tiempos de espigas desde el CSV...")
     df = pd.read_csv(csv_path)
@@ -129,14 +134,16 @@ if __name__ == '__main__':
 
     for unit_id, group in df.groupby("Neuron_ID"):
         unit_dict[unit_id] = group["Spike_Frame"].to_numpy(dtype=int)
-        # Extraer el canal indicado en el CSV (ej: "Ch0" o sacarlo de "Ch0_U1")
+        
+        # Extraer el canal exacto asignado en el CSV
         channel_name = group["Electrode_ID"].iloc[0] if "Electrode_ID" in group.columns else unit_id.split("_")[0]
         unit_to_channel[unit_id] = [channel_name]
 
-    print(f"Total de unidades aisladas: {len(unit_dict)}")
+    print(f"      -> Unidades totales aisladas: {len(unit_dict)}")
+    
     unified_sorting = sc.NumpySorting.from_unit_dict([unit_dict], sampling_frequency=fs)
-
-    # Fijar el canal asignado como propiedad directa en el Sorting
+    
+    # Fijamos el canal
     assigned_channels = [unit_to_channel[uid][0] for uid in unified_sorting.unit_ids]
     unified_sorting.set_property("channel_id", assigned_channels)
 
@@ -159,7 +166,7 @@ if __name__ == '__main__':
     analyzer = sc.create_sorting_analyzer(
         sorting=unified_sorting,
         recording=recording,
-        sparsity=sparsity,   # <--- Forzamos a que use el canal fijado
+        sparsity=sparsity,   
         format="memory",
         folder=None
     )
@@ -171,6 +178,10 @@ if __name__ == '__main__':
     analyzer.compute("waveforms", ms_before=1.0, ms_after=2.0, **job_kwargs)
     analyzer.compute("templates")
     analyzer.compute("noise_levels")
+    
+    # ---> CRÍTICO: Computar los componentes principales para poder ver las nubes de puntos en la Interfaz
+    print("Calculando Componentes Principales (PCA)...")
+    analyzer.compute("principal_components", n_components=3, mode="by_channel_local")
 
     print("\n¡Abriendo Interfaz Gráfica!")
     app = sig.run_mainwindow(analyzer)

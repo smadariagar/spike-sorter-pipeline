@@ -1,0 +1,7 @@
+matplotlib==3.11.1
+numpy==2.5.2
+pandas==3.0.5
+probeinterface==0.3.2
+scikit_learn==1.9.0
+spikeinterface==0.104.0
+spikeinterface_gui==0.13.0

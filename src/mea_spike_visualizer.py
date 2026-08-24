@@ -1,0 +1,186 @@
+import pandas as pd
+import numpy as np
+import os
+import shutil
+import json
+import tkinter as tk
+from tkinter import filedialog
+
+import spikeinterface.extractors as se
+import spikeinterface.preprocessing as spre
+import spikeinterface.core as sc
+import spikeinterface_gui as sig
+import probeinterface as pi
+
+# =========================================================
+# 0. ELECTRODE MAP FUNCTION
+# =========================================================
+def create_probe(is_mea, file_type, num_channels, pitch=200, radius=15):
+    if not is_mea:
+        linear_probe = pi.generate_linear_probe(num_elec=num_channels, ypitch=20) 
+        linear_probe.set_device_channel_indices(np.arange(num_channels))
+        return linear_probe
+
+    json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mea_mapping.json')
+    with open(json_path, 'r') as f:
+        mea_mapping = json.load(f)
+    
+    map_key = "channel_mapping_rhs" if file_type == 'rhs' else "channel_mapping_h5"
+    list_2_map = mea_mapping[map_key]
+
+    probe_mea = pi.Probe(ndim=2, si_units='um')
+    positions, valid_channel_indices = [], []
+    
+    for i, num in enumerate(list_2_map):
+        num_str = str(num)
+        if num_str == '0':
+            continue
+        x = (int(num_str[0]) - 1) * pitch
+        y = (8 - int(num_str[1])) * pitch
+        positions.append([x, y])
+        valid_channel_indices.append(i)
+
+    probe_mea.set_contacts(positions=np.array(positions), shapes='circle', shape_params={'radius': radius})
+    probe_mea.set_device_channel_indices(valid_channel_indices)
+    return probe_mea
+
+# =========================================================
+# 1. FILE SELECTION AND HEADER READING
+# =========================================================
+if __name__ == '__main__':
+    root = tk.Tk()
+    root.withdraw()
+
+    summary_path = filedialog.askopenfilename(
+        title="Select the summary file (analysis_summary_... .txt)",
+        filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+    )
+    if not summary_path:
+        print("Operation canceled.")
+        exit()
+
+    selected_file_paths = []
+    with open(summary_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("(Path:") and line.endswith(")"):
+                file_path = line.replace("(Path:", "").rstrip(")").strip()
+                if os.path.exists(file_path):
+                    selected_file_paths.append(file_path)
+                else:
+                    print(f"[WARNING] Original file not found at: {file_path}")
+
+    # Fallback plan: if the txt has no valid paths, ask the user manually
+    if not selected_file_paths:
+        print("\n[WARNING] No valid paths found. Select the original raw files (.h5 or .rhs):")
+        manual_paths = filedialog.askopenfilenames(
+            title="Select original raw files",
+            filetypes=[("H5/RHS files", "*.h5 *.rhs"), ("All files", "*.*")]
+        )
+        if not manual_paths:
+            print("[ERROR] Operation canceled.")
+            exit()
+        selected_file_paths = sorted(list(manual_paths))
+        
+    print(f"\n[+] Read {len(selected_file_paths)} original files.")
+
+    folder_path = os.path.dirname(summary_path)
+
+    # Find the generated results CSV automatically
+    csv_files = [f for f in os.listdir(folder_path) if f.startswith("all_spikes") and f.endswith(".csv")]
+    if not csv_files:
+        print(f"\n[ERROR] No results CSV file found in folder: {folder_path}")
+        exit()
+        
+    csv_path = os.path.join(folder_path, csv_files[0])
+    print(f"[+] Spikes CSV found: {os.path.basename(csv_path)}")
+
+    # =========================================================
+    # 2. ON-THE-FLY VIRTUAL RECONSTRUCTION
+    # =========================================================
+    print("\nReconstructing recording from original files...")
+    recording_list = []
+    if selected_file_paths[0].endswith('.h5'):
+        for full_file_path in selected_file_paths:
+            try:
+                recording_list.append(se.read_mcsh5(full_file_path, stream_id='0'))
+            except Exception as e:
+                pass 
+    elif selected_file_paths[0].endswith('.rhs'):
+        for full_file_path in selected_file_paths:
+            rec = se.read_intan(full_file_path, stream_id='0')
+            recording_list.append(spre.unsigned_to_signed(rec))
+                
+    recording = sc.concatenate_recordings(recording_list) if len(recording_list) > 1 else recording_list[0]
+    num_channels = recording.get_num_channels()
+    file_type = 'h5' if selected_file_paths[0].endswith('.h5') else 'rhs'
+    
+    probe = create_probe(is_mea=True, file_type=file_type, num_channels=num_channels)
+    recording = recording.set_probe(probe)
+    
+    print("Applying on-the-fly bandpass filter...")
+    recording = spre.bandpass_filter(recording, freq_min=300, freq_max=6000)
+    fs = recording.get_sampling_frequency()
+
+    # =========================================================
+    # 3. LOAD RESULTS DIRECTLY FROM CSV
+    # =========================================================
+    print(f"\nLoading spike times from CSV...")
+    df = pd.read_csv(csv_path)
+
+    unit_dict = {}
+    unit_to_channel = {}
+
+    for unit_id, group in df.groupby("Neuron_ID"):
+        unit_dict[unit_id] = group["Spike_Frame"].to_numpy(dtype=int)
+        
+        # Extract the exact channel assigned in the CSV
+        channel_name = group["Electrode_ID"].iloc[0] if "Electrode_ID" in group.columns else unit_id.split("_")[0]
+        unit_to_channel[unit_id] = [channel_name]
+
+    print(f"      -> Total isolated units: {len(unit_dict)}")
+    
+    unified_sorting = sc.NumpySorting.from_unit_dict([unit_dict], sampling_frequency=fs)
+    
+    # Assign channel property
+    assigned_channels = [unit_to_channel[uid][0] for uid in unified_sorting.unit_ids]
+    unified_sorting.set_property("channel_id", assigned_channels)
+
+    # =========================================================
+    # 4. EXTRACTION AND VISUALIZATION WITH FORCED CHANNEL
+    # =========================================================
+    analyzer_folder = os.path.join(folder_path, "unified_analyzer")
+
+    if os.path.exists(analyzer_folder):
+        shutil.rmtree(analyzer_folder)
+
+    # Create forced sparsity so each unit only uses its assigned channel
+    sparsity = sc.ChannelSparsity.from_unit_id_to_channel_ids(
+        unit_to_channel, 
+        unit_ids=unified_sorting.unit_ids, 
+        channel_ids=recording.get_channel_ids()
+    )
+
+    print("\nCreating Global Analyzer...")
+    analyzer = sc.create_sorting_analyzer(
+        sorting=unified_sorting,
+        recording=recording,
+        sparsity=sparsity,   
+        format="memory",
+        folder=None
+    )
+
+    print("Extracting waveforms and templates...")
+    job_kwargs = dict(n_jobs=-1, progress_bar=True, chunk_duration="1s")
+
+    analyzer.compute("random_spikes", method="uniform", max_spikes_per_unit=500)
+    analyzer.compute("waveforms", ms_before=1.0, ms_after=2.0, **job_kwargs)
+    analyzer.compute("templates")
+    analyzer.compute("noise_levels")
+    
+    # Compute principal components to visualize point clouds in the GUI
+    print("Computing Principal Components (PCA)...")
+    analyzer.compute("principal_components", n_components=3, mode="by_channel_local")
+
+    print("\nOpening Graphical Interface!")
+    app = sig.run_mainwindow(analyzer)

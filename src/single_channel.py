@@ -85,7 +85,7 @@ custom_sorter_params = {
     'peak_sign': 'neg',             
     'exclude_sweep_ms': 1.5,        
     'max_clusters_to_test': 10,     
-    'min_silhouette_score': 0.15    # Umbral mínimo puro
+    'min_silhouette_score': 0.15   
 }
 
 # =========================================================

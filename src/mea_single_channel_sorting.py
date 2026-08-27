@@ -216,7 +216,7 @@ if __name__ == '__main__':
             print(f"     Found {len(found_units)} units in channel {chan_id}")
             
             for unit_idx, unit_id in enumerate(found_units):
-                global_unit_id = f"Ch{chan_id}_U{unit_idx}"
+                global_unit_id = f"{chan_id}_U{unit_idx}"
                 spike_frames = sorting_result.get_unit_spike_train(unit_id)
                 
                 for frame in spike_frames:

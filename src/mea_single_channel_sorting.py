@@ -67,7 +67,7 @@ sorter_name = 'mountainsort5'
 
 sorter_params = {
     # 1. Sensitivity Adjustment (Global Noise)
-    'detect_threshold': 4.0,        
+    'detect_threshold': 5.0,        
     'detect_sign': -1,              
     
     # 2. Overclustering Adjustment (Physiological Drift)

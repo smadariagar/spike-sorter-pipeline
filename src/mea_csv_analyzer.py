@@ -61,6 +61,48 @@ def compute_sttc(spikes_A, spikes_B, dt, t_start, t_end):
     term2 = 0.0 if P_B * T_A == 1.0 else (P_B - T_A) / (1.0 - P_B * T_A)
     return 0.5 * (term1 + term2)
 
+def compute_ccg(spikes_A, spikes_B, bin_size=0.001, max_lag=0.1):
+    """Calcula el Correlograma Cruzado (CCG) entre dos trenes de espigas."""
+    bins = np.arange(-max_lag, max_lag + bin_size, bin_size)
+    counts = np.zeros(len(bins) - 1)
+    
+    if len(spikes_A) == 0 or len(spikes_B) == 0:
+        return counts, bins
+        
+    for t in spikes_A:
+        idx_start = np.searchsorted(spikes_B, t - max_lag)
+        idx_end = np.searchsorted(spikes_B, t + max_lag)
+        
+        if idx_start < idx_end:
+            relative_times = spikes_B[idx_start:idx_end] - t
+            hist, _ = np.histogram(relative_times, bins=bins)
+            counts += hist
+            
+    return counts, bins
+
+def plot_ccg(counts, bins, label_A, label_B, cond_name):
+    """Grafica el Correlograma Cruzado de forma limpia y profesional."""
+    # Centrar los bins para el gráfico (convertir a milisegundos)
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+    bin_centers_ms = bin_centers * 1000  
+    
+    fig, ax = plt.subplots(figsize=(8, 4))
+    
+    # Dibujar el histograma
+    ax.bar(bin_centers_ms, counts, width=(bins[1]-bins[0])*1000, color='royalblue', edgecolor='black', alpha=0.8)
+    
+    # Marcar el Tiempo Cero (Momento en que dispara la Neurona A)
+    ax.axvline(x=0, color='red', linestyle='--', linewidth=2, label=f'Spike {label_A} (t=0)')
+    
+    ax.set_title(f'Cross-Correlogram: {label_A} $\\rightarrow$ {label_B} ({cond_name})', fontsize=14, fontweight='bold')
+    ax.set_xlabel('Lag temporal de la Neurona Objetivo (ms)', fontsize=12)
+    ax.set_ylabel('Conteo de Espigas (Coincidencias)', fontsize=12)
+    ax.grid(True, linestyle='--', alpha=0.6)
+    ax.legend()
+    
+    plt.tight_layout()
+    plt.show()
+
 # ==========================================
 # 1. BATCH FILE SELECTION UI
 # ==========================================
@@ -401,3 +443,112 @@ plt.savefig(graph_plot_path, format='jpg', dpi=150)
 plt.show()
 
 print("\nAnalysis Complete! All plots and metrics saved in the Output_Analysis folder.")
+
+# =========================================================
+# 9. MATRIZ DE CORRELOGRAMAS (5x5) Y EXPORTACIÓN MASIVA (CSV)
+# =========================================================
+print("\n--- Analizando direccionalidad temporal (CCG) de toda la red ---")
+
+# 1. Encontrar las 5 neuronas más conectadas globalmente (Para el gráfico)
+avg_sttc_matrix = sum([m.values for m in sttc_matrices.values()]) / n_conds
+df_avg_sttc = pd.DataFrame(avg_sttc_matrix, index=common_neurons, columns=common_neurons)
+
+node_strength = df_avg_sttc.sum(axis=0) - 1 
+n_top = min(5, len(common_neurons))
+top_neurons = node_strength.nlargest(n_top).index.tolist()
+
+print(f"Top {n_top} neuronas núcleo para visualización: {top_neurons}")
+
+ccg_results = []
+bin_size = 0.001 # 1 ms bins
+max_lag = 0.1    # +/- 100 ms
+
+for cond_name, data in datasets.items():
+    print(f"\n -> Procesando métricas CCG para todas las neuronas en: {cond_name}")
+    
+    # =======================================================
+    # A) BUCLE MASIVO: Calcular CCG para TODAS las neuronas (Para el CSV)
+    # =======================================================
+    for neuron_A in common_neurons:
+        for neuron_B in common_neurons:
+            spikes_A = data['spike_trains'][neuron_A]
+            spikes_B = data['spike_trains'][neuron_B]
+            
+            counts, bins = compute_ccg(spikes_A, spikes_B, bin_size=bin_size, max_lag=max_lag)
+            is_auto = (neuron_A == neuron_B)
+            
+            if len(counts) > 0:
+                bin_centers_ms = ((bins[:-1] + bins[1:]) / 2) * 1000
+                
+                # Enmascarar el pico artificial en 0 ms para auto-correlogramas
+                if is_auto:
+                    center_idx = len(counts) // 2
+                    mask_range = int(0.002 / bin_size) # ignorar +/- 2 ms
+                    counts_for_peak = np.copy(counts)
+                    counts_for_peak[center_idx - mask_range : center_idx + mask_range + 1] = 0
+                else:
+                    counts_for_peak = counts
+                    
+                peak_idx = np.argmax(counts_for_peak)
+                peak_lag = bin_centers_ms[peak_idx]
+                peak_val = counts[peak_idx]
+            else:
+                peak_lag, peak_val = np.nan, 0
+                
+            ccg_results.append({
+                'Condition': cond_name,
+                'Trigger_Neuron': neuron_A,
+                'Target_Neuron': neuron_B,
+                'Pair_Type': 'Auto' if is_auto else 'Cross',
+                'Peak_Lag_ms': peak_lag,
+                'Max_Coincidences': peak_val
+            })
+
+    # =======================================================
+    # B) BUCLE VISUAL: Graficar solo el panel 5x5 de las Top Neuronas
+    # =======================================================
+    print(f" -> Generando panel visual 5x5...")
+    fig, axes = plt.subplots(n_top, n_top, figsize=(15, 15))
+    fig.suptitle(f'Microcircuit CCG Matrix - {cond_name}\nTop {n_top} Neurons', fontsize=18, fontweight='bold', y=0.98)
+    
+    for i, neuron_A in enumerate(top_neurons):
+        for j, neuron_B in enumerate(top_neurons):
+            ax = axes[i, j]
+            
+            spikes_A = data['spike_trains'][neuron_A]
+            spikes_B = data['spike_trains'][neuron_B]
+            
+            counts, bins = compute_ccg(spikes_A, spikes_B, bin_size=bin_size, max_lag=max_lag)
+            bin_centers_ms = ((bins[:-1] + bins[1:]) / 2) * 1000
+            
+            is_auto = (i == j)
+            color = 'forestgreen' if is_auto else 'royalblue'
+            ax.bar(bin_centers_ms, counts, width=1.0, color=color, alpha=0.9)
+            ax.axvline(0, color='red', linestyle='--', linewidth=1.5, alpha=0.7)
+            
+            # Formateo estético del cuadro 5x5
+            if i == 0:
+                ax.set_title(f"Target:\n{neuron_B}", fontsize=12, fontweight='bold')
+            if j == 0:
+                ax.set_ylabel(f"Trigger:\n{neuron_A}", fontsize=12, fontweight='bold')
+            
+            if i < n_top - 1:
+                ax.set_xticklabels([])
+            else:
+                ax.set_xlabel('Lag (ms)', fontsize=10)
+                
+            ax.grid(True, linestyle=':', alpha=0.5)
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.92) 
+    
+    ccg_plot_path = output_folder / f"CCG_Matrix_5x5_{cond_name}.jpg"
+    plt.savefig(ccg_plot_path, format='jpg', dpi=200)
+    plt.show() 
+
+# 3. Guardar TODOS los resultados de la red completa en un CSV
+df_ccg_results = pd.DataFrame(ccg_results)
+ccg_csv_path = output_folder / "CCG_Peak_Metrics_Full_Network.csv"
+df_ccg_results.to_csv(ccg_csv_path, index=False)
+
+print(f"\n¡Éxito! Gráficos 5x5 y métricas masivas guardadas en:\n{output_folder}")

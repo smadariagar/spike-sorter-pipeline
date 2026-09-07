@@ -91,43 +91,51 @@ sorter_params = {
 # =========================================================
 if __name__ == '__main__':
     
-    # 1. FILE SELECTION UI
+    # 1. MULTIPLE CONDITION FILE SELECTION UI
     root = tk.Tk()
-    root.withdraw() # Hides the main empty window
+    root.withdraw()
 
-    selected_file_paths = filedialog.askopenfilenames(
-        title="Select recording files (You can select multiple)",
-        filetypes=[("H5/RHS files", "*.h5 *.rhs"), ("H5 files", "*.h5"), ("RHS files", "*.rhs"), ("All files", "*.*")]
-    )
+    conditions_data = []
+    
+    # We ask for 3 distinct conditions sequentially
+    for i in range(1, 4):
+        cond_name = simpledialog.askstring(f"Condition {i}", f"Enter name for Condition {i}\n(e.g., 'Baseline', 'Low_Glucose', 'No_Glucose'):")
+        if not cond_name:
+            print("Operation canceled.")
+            exit()
 
-    if not selected_file_paths:
-        print("Operation canceled.")
-        root.destroy()
-        exit() 
+        file_paths = filedialog.askopenfilenames(
+            title=f"Select recording files for '{cond_name}' (Condition {i})",
+            filetypes=[("H5/RHS files", "*.h5 *.rhs"), ("H5 files", "*.h5"), ("RHS files", "*.rhs"), ("All files", "*.*")]
+        )
+        if not file_paths:
+            print(f"No files selected for {cond_name}. Canceling.")
+            exit()
 
-    selected_file_paths = sorted(list(selected_file_paths))
+        conditions_data.append({
+            "name": cond_name,
+            "files": sorted(list(file_paths)),
+            "recordings": []
+        })
 
-    custom_name = simpledialog.askstring("Output Name", "Enter the name for this analysis session:")
+    custom_name = simpledialog.askstring("Output Name", "Enter the name for this overall analysis session:")
     if not custom_name:
-        print("No name provided. Operation canceled.")
-        root.destroy()
         exit()
 
-    # Ask the user if they want to keep the heavy binary cache
     keep_cached_binary = messagebox.askyesno(
         "Keep Binary Cache", 
         "Do you want to keep the heavy 'cached_binary_full' folder?\n\n"
-        "YES: Keep it only if you will use Phy for manual curation (It takes several GBs).\n"
+        "YES: Keep it only if you need it for manual inspection later.\n"
         "NO: Delete it at the end to save hard drive space."
     )
 
     root.destroy()
 
-    input_folder = os.path.dirname(selected_file_paths[0])
+    input_folder = os.path.dirname(conditions_data[0]["files"][0])
     output_folder = os.path.join(input_folder, f'single_channel_sorting/{custom_name}/')
     os.makedirs(output_folder, exist_ok=True)
 
-    # 1.5 GENERATE SUMMARY FILE (HEADER)
+    # 1.5 GENERATE SUMMARY FILE
     summary_txt_path = os.path.join(output_folder, f"analysis_summary_{custom_name}.txt")
     with open(summary_txt_path, 'w', encoding='utf-8') as f:
         f.write("=========================================================\n")
@@ -136,53 +144,64 @@ if __name__ == '__main__':
         f.write(f"Session Name: {custom_name}\n")
         f.write(f"Kept Binary Cache: {keep_cached_binary}\n\n") 
         
-        f.write("--- FILES USED ---\n")
-        for file_path in selected_file_paths:
-            f.write(f" * {os.path.basename(file_path)}\n")
-            f.write(f"   (Path: {file_path})\n")
+        f.write("--- CONDITIONS AND FILES USED ---\n")
+        for cond in conditions_data:
+            f.write(f"\nCondition: {cond['name']}\n")
+            for file_path in cond['files']:
+                f.write(f" * {os.path.basename(file_path)}\n")
+                f.write(f"   (Path: {file_path})\n")
         
         f.write("\n--- SORTER CONFIGURATION ---\n")
         f.write(f"Algorithm: {sorter_name}\n")
-        f.write("Parameters:\n")
         for key, value in sorter_params.items():
             f.write(f" * {key}: {value}\n")
     print(f"Summary file created at: {summary_txt_path}")
 
-    # 2. DATA LOADING AND GEOMETRY
-    recording_list = []
+    # 2. DATA LOADING & TEMPORAL BOUNDARY TRACKING
+    all_recordings = []
+    condition_boundaries = {}
+    current_frame_offset = 0
 
-    if selected_file_paths[0].endswith('.h5'):
-        print(f"Loading {len(selected_file_paths)} H5 file(s)...")
-        for full_file_path in selected_file_paths:
+    print("\nLoading files and mapping temporal boundaries...")
+    for cond in conditions_data:
+        cond_recs = []
+        for full_file_path in cond["files"]:
             try:
-                rec = se.read_mcsh5(full_file_path, stream_id='0')
-                recording_list.append(rec)
+                if full_file_path.endswith('.h5'):
+                    rec = se.read_mcsh5(full_file_path, stream_id='0')
+                elif full_file_path.endswith('.rhs'):
+                    rec = se.read_intan(full_file_path, stream_id='0')
+                    rec = spre.unsigned_to_signed(rec)
+                cond_recs.append(rec)
             except Exception as e:
                 print(f"  -> WARNING: Could not load '{os.path.basename(full_file_path)}'. Error: {e}")
- 
-    elif selected_file_paths[0].endswith('.rhs'):
-        print(f"Loading {len(selected_file_paths)} RHS file(s)...")
-        for full_file_path in selected_file_paths:
-            rec = se.read_intan(full_file_path, stream_id='0')
-            rec = spre.unsigned_to_signed(rec)
-            recording_list.append(rec)
 
-    if not recording_list:
+        # Calculate exact number of frames for this specific condition
+        condition_length = sum([r.get_num_samples() for r in cond_recs])
+        
+        condition_boundaries[cond["name"]] = {
+            "start_frame": current_frame_offset,
+            "end_frame": current_frame_offset + condition_length
+        }
+        current_frame_offset += condition_length
+        
+        all_recordings.extend(cond_recs)
+
+    if not all_recordings:
         print("\nError: No valid recordings were loaded.")
         exit()
 
-    recording = sc.concatenate_recordings(recording_list) if len(recording_list) > 1 else recording_list[0]
+    recording = sc.concatenate_recordings(all_recordings) if len(all_recordings) > 1 else all_recordings[0]
     num_channels = recording.get_num_channels()
     
-    file_type = 'h5' if selected_file_paths[0].endswith('.h5') else 'rhs'
+    file_type = 'h5' if conditions_data[0]["files"][0].endswith('.h5') else 'rhs'
     probe = create_probe(is_mea=MEA_probe, file_type=file_type, num_channels=num_channels)
     recording = recording.set_probe(probe)
 
-    # 3. PREPROCESSING & CACHING (ENTIRE DATASET)
-    print("Applying chained preprocessing...")
+    # 3. PREPROCESSING & CACHING (ENTIRE UNIFIED DATASET)
+    print("\nApplying chained preprocessing...")
     recording = spre.bandpass_filter(recording, freq_min=300, freq_max=6000)
 
-    # Temporarily saved to disk for efficient sorting
     cached_folder = os.path.join(output_folder, "cached_binary_full")
     print(f"Saving preprocessed full data to disk...")
     job_kwargs = dict(n_jobs=-1, chunk_duration="1s", progress_bar=True)
@@ -190,7 +209,7 @@ if __name__ == '__main__':
     
     fs = recording_saved.get_sampling_frequency()
 
-    # 4. SINGLE CHANNEL SORTING LOOP
+    # 4. SINGLE CHANNEL SORTING LOOP (MOUNTAINSORT5)
     all_spikes_data = []
     
     channel_ids = recording_saved.get_channel_ids()
@@ -222,48 +241,62 @@ if __name__ == '__main__':
                     all_spikes_data.append({
                         'Electrode_ID': chan_id,
                         'Neuron_ID': global_unit_id,
-                        'Spike_Frame': frame,
-                        'Spike_Time_Seconds': frame / fs
+                        'Absolute_Spike_Frame': frame,
+                        'Absolute_Spike_Time_s': frame / fs
                     })
                     
         except Exception as e:
             print(f"     [ERROR] Sorter failed on channel {chan_id}. Skipping. Error: {e}")
             
         finally:
-            # IMMEDIATE CLEANUP: Delete the sorter folder for this channel
             if os.path.exists(chan_output_folder):
                 shutil.rmtree(chan_output_folder, ignore_errors=True)
 
-    # 5. EXPORT FINAL CONSOLIDATED DATA
+    # 5. SPLIT AND EXPORT CONSOLIDATED DATA PER CONDITION
     if len(all_spikes_data) > 0:
-        print("\n=== All channels processed. Saving consolidated data ===")
+        print("\n=== All channels processed. Splitting data by condition ===")
         df_spikes = pd.DataFrame(all_spikes_data)
+        df_spikes = df_spikes.sort_values(by='Absolute_Spike_Time_s').reset_index(drop=True)
         
-        df_spikes = df_spikes.sort_values(by='Spike_Time_Seconds').reset_index(drop=True)
+        # Save a master file with everything
+        master_csv = os.path.join(output_folder, f"Master_All_Conditions_{custom_name}.csv")
+        df_spikes.to_csv(master_csv, index=False)
         
-        csv_path = os.path.join(output_folder, f"all_spikes_consolidated_{custom_name}.csv")
-        df_spikes.to_csv(csv_path, index=False)
-        
-        print(f"Success! Total spikes found across all channels: {len(df_spikes)}")
-        print(f"Data saved to: {csv_path}")
+        # Isolate and export the 3 individual conditions
+        for cond_name, bounds in condition_boundaries.items():
+            start_f = bounds["start_frame"]
+            end_f = bounds["end_frame"]
+            
+            # Mask to filter spikes within this condition's temporal bounds
+            mask = (df_spikes['Absolute_Spike_Frame'] >= start_f) & (df_spikes['Absolute_Spike_Frame'] < end_f)
+            cond_df = df_spikes[mask].copy()
+            
+            # Add relative time columns (Starting from 0 for each condition)
+            cond_df['Relative_Spike_Frame'] = cond_df['Absolute_Spike_Frame'] - start_f
+            cond_df['Relative_Spike_Time_s'] = cond_df['Relative_Spike_Frame'] / fs
+            
+            # Drop absolute columns for the individual files to keep them clean
+            cond_df = cond_df[['Electrode_ID', 'Neuron_ID', 'Relative_Spike_Frame', 'Relative_Spike_Time_s']]
+            cond_df = cond_df.rename(columns={'Relative_Spike_Frame': 'Spike_Frame', 'Relative_Spike_Time_s': 'Spike_Time_Seconds'})
+            
+            cond_csv_path = os.path.join(output_folder, f"spikes_{custom_name}_{cond_name}.csv")
+            cond_df.to_csv(cond_csv_path, index=False)
+            print(f" -> Exported '{cond_name}': {len(cond_df)} spikes saved to {os.path.basename(cond_csv_path)}")
+            
     else:
         print("\nNo spikes were found in any channel.")
 
-    # 6. FINAL CACHE CLEANUP (OPTIONAL BASED ON USER DECISION)
+    # 6. FINAL CACHE CLEANUP
     print("\n[+] Managing heavy temporary binary files...")
-    # Unbind the variable and force Python to release the files
     del recording_saved   
     gc.collect()          
     
     if not keep_cached_binary:
-        # User chose NOT to keep the folder (save space)
         if os.path.exists(cached_folder):
             try:
                 shutil.rmtree(cached_folder, ignore_errors=True)
                 print("    -> Cached binary deleted successfully. Storage space recovered!")
             except Exception as e:
-                print(f"    -> Could not completely delete cached binary. Please remove it manually if needed. Error: {e}")
+                print(f"    -> Could not completely delete cached binary. Error: {e}")
     else:
-        # User chose YES to keep it
         print(f"    -> Cached binary KEPT at: {cached_folder}")
-        print("    -> (Remember to delete it manually if you do not need it later)")  
